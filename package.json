@@ -1,0 +1,29 @@
+{
+  "name": "pi-memories",
+  "version": "0.1.0",
+  "description": "Gives pi a persistent, file-based memory system modeled on Claude Code's auto-memory. Complementary to pi-claude-memories (which reads Claude's memory files); this one lets pi write and maintain its own.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Acelogic/pi-memories.git"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "memory",
+    "auto-memory",
+    "extension"
+  ],
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": "^0.67.6",
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.3"
+  }
+}
