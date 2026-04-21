@@ -368,13 +368,23 @@ export default function piMemoriesExtension(pi: ExtensionAPI) {
 		if (total === 0 && !forceInjectNext) return { action: "continue" };
 
 		const triggersOn = triggersEnabled();
-		const { matched, stripped } = triggersOn
+		// Direct trigger match on the (possibly-already-transformed) input text.
+		const { matched: directMatch } = triggersOn
 			? matchTrigger(event.text)
-			: { matched: false, stripped: event.text };
-		const shouldInject = matched || forceInjectNext;
+			: { matched: false };
+		// Piggyback: if pi-claude-memories' input handler already ran and stripped
+		// its trigger, the text will contain its <claude-memory> block. Treat that
+		// as our trigger too, so both blocks end up in the same turn regardless of
+		// extension handler order.
+		const piggybackMatch = triggersOn && /<claude-memory>/i.test(event.text);
+
+		const shouldInject = directMatch || piggybackMatch || forceInjectNext;
 		if (!shouldInject) return { action: "continue" };
 		forceInjectNext = false;
 
+		// Do not strip our own trigger phrase — leave the text untouched so any
+		// later extension handler (e.g. pi-claude-memories, if it runs after us)
+		// can still match on "read memories" and inject its block too.
 		const injection = buildInjectionBlock(
 			projectDir,
 			userDir,
@@ -383,11 +393,9 @@ export default function piMemoriesExtension(pi: ExtensionAPI) {
 			projectFiles,
 			userFiles,
 		);
-		const remainder = (matched ? stripped : event.text).trim();
-		const tail = remainder.length > 0 ? remainder : "(Please acknowledge the loaded pi memories.)";
 		return {
 			action: "transform",
-			text: `${injection}\n\n${tail}`,
+			text: `${injection}\n\n${event.text}`,
 		};
 	});
 
