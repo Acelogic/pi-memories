@@ -39,7 +39,14 @@ Each directory holds individual `*.md` memory files plus a `MEMORY.md` index tha
 - Different status ID: `pi-memories` vs `claude-memories` — both appear in the footer
 - Different commands: `/pi-memory-*` vs `/memories-*`
 - Different env var prefix: `PI_MEMORIES_*` vs `PI_CLAUDE_MEMORIES_*`
-- Different trigger behavior: pi-memories always auto-injects; pi-claude-memories injects on trigger phrase (`read memories`, etc.). Say `read memories` and pi-claude-memories will inject Claude's memories *in addition to* pi's own.
+- Trigger phrases overlap: saying `read memories` makes both extensions inject their blocks in the same turn (handler-order-independent).
+
+## Write guard (protects Claude's memory files)
+
+pi-memories registers a `tool_call` hook that **blocks any `write` or `edit` tool call targeting a path inside `~/.claude/`**, so the LLM can't accidentally overwrite a Claude Code memory file even if it gets confused about which system it's operating in. Reads are unaffected.
+
+- Resolves `~/.claude/` from `PI_CLAUDE_MEMORIES_DIR` if set, otherwise `~/.claude/`.
+- Disable with `PI_MEMORIES_GUARD_CLAUDE=false` if you genuinely need pi to write there.
 
 ## Commands
 
@@ -72,3 +79,4 @@ Or add to `~/.pi/agent/settings.json`:
 - `PI_MEMORIES_TRIGGERS` — comma-separated trigger phrases (overrides defaults)
 - `PI_MEMORIES_MAX_INDEX_BYTES=60000` — cap injected `MEMORY.md` size in system prompt (default 60 KB per scope)
 - `PI_MEMORIES_MAX_INJECT_BYTES=200000` — cap total bytes of full-content trigger injection (default 200 KB)
+- `PI_MEMORIES_GUARD_CLAUDE=false` — disable the `~/.claude/` write guard (default: guard is on)

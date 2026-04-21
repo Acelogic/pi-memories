@@ -50,6 +50,25 @@ function userMemoryDir(): string {
 	return path.join(memoryRoot(), "user");
 }
 
+function claudeRoot(): string {
+	const override = process.env.PI_CLAUDE_MEMORIES_DIR?.trim();
+	return path.resolve(override || path.join(os.homedir(), ".claude"));
+}
+
+function guardEnabled(): boolean {
+	const raw = process.env.PI_MEMORIES_GUARD_CLAUDE?.trim().toLowerCase();
+	if (!raw) return true;
+	return !["0", "false", "no", "off"].includes(raw);
+}
+
+function isInsideClaudeDir(absPath: string): boolean {
+	const target = path.resolve(absPath);
+	const root = claudeRoot();
+	if (target === root) return true;
+	const withSep = root.endsWith(path.sep) ? root : root + path.sep;
+	return target.startsWith(withSep);
+}
+
 function indexPath(dir: string): string {
 	return path.join(dir, "MEMORY.md");
 }
@@ -358,6 +377,22 @@ export default function piMemoriesExtension(pi: ExtensionAPI) {
 			systemPrompt:
 				event.systemPrompt +
 				buildMemoryPrompt(projectDir, userDir, projectIndex, userIndex),
+		};
+	});
+
+	pi.on("tool_call", async (event, ctx) => {
+		if (!guardEnabled()) return;
+		if (event.toolName !== "write" && event.toolName !== "edit") return;
+		const target = (event.input as { path?: unknown }).path;
+		if (typeof target !== "string" || target.length === 0) return;
+		const absTarget = path.isAbsolute(target) ? target : path.resolve(ctx.cwd, target);
+		if (!isInsideClaudeDir(absTarget)) return;
+		return {
+			block: true,
+			reason:
+				"pi-memories: writes to ~/.claude/ are blocked — that directory belongs to Claude Code and is read-only from pi. " +
+				"Save pi memories under ~/.pi/memory/projects/<cwd>/ or ~/.pi/memory/user/ instead. " +
+				"(Set PI_MEMORIES_GUARD_CLAUDE=false to disable this guard.)",
 		};
 	});
 
