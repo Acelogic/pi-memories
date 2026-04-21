@@ -9,6 +9,16 @@ import type {
 
 const STATUS_ID = "pi-memories";
 const DEFAULT_MAX_INDEX_BYTES = 60_000;
+const DEFAULT_MAX_INJECT_BYTES = 200_000;
+const DEFAULT_TRIGGERS = [
+	"read memories",
+	"check memories",
+	"load memories",
+	"remember memories",
+	"use memories",
+	"@memories",
+	"@pi-memories",
+];
 
 const CYAN = "\x1b[38;5;51m";
 const RESET = "\x1b[0m";
@@ -49,6 +59,28 @@ function maxIndexBytes(): number {
 	if (!raw) return DEFAULT_MAX_INDEX_BYTES;
 	const n = Number.parseInt(raw, 10);
 	return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_INDEX_BYTES;
+}
+
+function maxInjectBytes(): number {
+	const raw = process.env.PI_MEMORIES_MAX_INJECT_BYTES?.trim();
+	if (!raw) return DEFAULT_MAX_INJECT_BYTES;
+	const n = Number.parseInt(raw, 10);
+	return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_INJECT_BYTES;
+}
+
+function triggers(): string[] {
+	const raw = process.env.PI_MEMORIES_TRIGGERS?.trim();
+	if (!raw) return DEFAULT_TRIGGERS;
+	return raw
+		.split(",")
+		.map((s) => s.trim().toLowerCase())
+		.filter(Boolean);
+}
+
+function triggersEnabled(): boolean {
+	const raw = process.env.PI_MEMORIES_TRIGGER?.trim().toLowerCase();
+	if (!raw) return true;
+	return !["0", "false", "no", "off"].includes(raw);
 }
 
 function injectionEnabled(): boolean {
@@ -97,6 +129,80 @@ function listMemoryFiles(dir: string, scope: MemoryScope): MemoryFile[] {
 function truncateForPrompt(content: string, budget: number): string {
 	if (content.length <= budget) return content;
 	return `${content.slice(0, budget)}\n[truncated: exceeded ${budget} bytes]`;
+}
+
+function matchTrigger(text: string): { matched: boolean; stripped: string } {
+	const lower = text.toLowerCase();
+	for (const phrase of triggers()) {
+		const idx = lower.indexOf(phrase);
+		if (idx !== -1) {
+			const stripped = (text.slice(0, idx) + text.slice(idx + phrase.length)).trim();
+			return { matched: true, stripped };
+		}
+	}
+	return { matched: false, stripped: text };
+}
+
+function buildInjectionBlock(
+	projectDir: string,
+	userDir: string,
+	projectIndex: string | null,
+	userIndex: string | null,
+	projectFiles: MemoryFile[],
+	userFiles: MemoryFile[],
+): string {
+	const total =
+		(projectIndex != null ? 1 : 0) +
+		(userIndex != null ? 1 : 0) +
+		projectFiles.length +
+		userFiles.length;
+	if (total === 0) {
+		return "<pi-memory>(no pi memory files found)</pi-memory>";
+	}
+
+	const budget = maxInjectBytes();
+	const parts: string[] = [];
+	let used = 0;
+
+	const addPart = (header: string, body: string) => {
+		const remaining = budget - used - header.length;
+		if (remaining <= 200) {
+			parts.push(`${header}[truncated: size budget exhausted]`);
+			return false;
+		}
+		const chunk =
+			body.length > remaining ? `${body.slice(0, remaining)}\n[truncated]` : body;
+		parts.push(header + chunk);
+		used += header.length + chunk.length;
+		return true;
+	};
+
+	if (projectIndex != null) {
+		if (!addPart(`--- project/MEMORY.md (${path.join(projectDir, "MEMORY.md")}) ---\n`, projectIndex)) {
+			return `<pi-memory>\n${parts.join("\n\n")}\n</pi-memory>`;
+		}
+	}
+	for (const f of projectFiles) {
+		const body = safeRead(f.absPath);
+		if (body == null) continue;
+		if (!addPart(`--- ${f.id} (${f.absPath}) ---\n`, body)) {
+			return `<pi-memory>\n${parts.join("\n\n")}\n</pi-memory>`;
+		}
+	}
+	if (userIndex != null) {
+		if (!addPart(`--- user/MEMORY.md (${path.join(userDir, "MEMORY.md")}) ---\n`, userIndex)) {
+			return `<pi-memory>\n${parts.join("\n\n")}\n</pi-memory>`;
+		}
+	}
+	for (const f of userFiles) {
+		const body = safeRead(f.absPath);
+		if (body == null) continue;
+		if (!addPart(`--- ${f.id} (${f.absPath}) ---\n`, body)) {
+			return `<pi-memory>\n${parts.join("\n\n")}\n</pi-memory>`;
+		}
+	}
+
+	return `<pi-memory>\n${parts.join("\n\n")}\n</pi-memory>`;
 }
 
 function buildMemoryPrompt(
@@ -210,6 +316,7 @@ export default function piMemoriesExtension(pi: ExtensionAPI) {
 	let userIndex: string | null = null;
 	let projectFiles: MemoryFile[] = [];
 	let userFiles: MemoryFile[] = [];
+	let forceInjectNext = false;
 
 	function refresh(cwd: string) {
 		projectDir = projectMemoryDir(cwd);
@@ -251,6 +358,36 @@ export default function piMemoriesExtension(pi: ExtensionAPI) {
 			systemPrompt:
 				event.systemPrompt +
 				buildMemoryPrompt(projectDir, userDir, projectIndex, userIndex),
+		};
+	});
+
+	pi.on("input", async (event) => {
+		if (event.source === "extension") return { action: "continue" };
+		reloadIndices();
+		const total = projectFiles.length + userFiles.length;
+		if (total === 0 && !forceInjectNext) return { action: "continue" };
+
+		const triggersOn = triggersEnabled();
+		const { matched, stripped } = triggersOn
+			? matchTrigger(event.text)
+			: { matched: false, stripped: event.text };
+		const shouldInject = matched || forceInjectNext;
+		if (!shouldInject) return { action: "continue" };
+		forceInjectNext = false;
+
+		const injection = buildInjectionBlock(
+			projectDir,
+			userDir,
+			projectIndex,
+			userIndex,
+			projectFiles,
+			userFiles,
+		);
+		const remainder = (matched ? stripped : event.text).trim();
+		const tail = remainder.length > 0 ? remainder : "(Please acknowledge the loaded pi memories.)";
+		return {
+			action: "transform",
+			text: `${injection}\n\n${tail}`,
 		};
 	});
 
@@ -324,6 +461,35 @@ export default function piMemoriesExtension(pi: ExtensionAPI) {
 				return;
 			}
 			ctx.ui.notify(`${match.absPath}\n\n${body}`, "info");
+		},
+	});
+
+	pi.registerCommand("pi-memory-load", {
+		description: "Force-inject all pi memory contents into the next turn",
+		handler: async (_args, ctx) => {
+			reloadIndices();
+			const total = projectFiles.length + userFiles.length;
+			if (total === 0) {
+				ctx.ui.notify("No pi memories to inject yet.", "warning");
+				return;
+			}
+			forceInjectNext = true;
+			ctx.ui.notify(
+				`Will inject ${projectFiles.length} project + ${userFiles.length} user memory file(s) on the next turn.`,
+				"info",
+			);
+		},
+	});
+
+	pi.registerCommand("pi-memory-debug", {
+		description: "Print the exact system-prompt block pi-memories is injecting right now",
+		handler: async (_args, ctx) => {
+			reloadIndices();
+			const block = buildMemoryPrompt(projectDir, userDir, projectIndex, userIndex);
+			ctx.ui.notify(
+				`Injection status: ${injectionEnabled() ? "ON" : "OFF"}\nTriggers: ${triggersEnabled() ? triggers().join(", ") : "disabled"}\nProject dir: ${projectDir}\nUser dir:    ${userDir}\n\n=== system-prompt addition ===\n${block}`,
+				"info",
+			);
 		},
 	});
 
