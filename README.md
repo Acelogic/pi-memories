@@ -1,6 +1,6 @@
 # pi-memories
 
-A [pi](https://github.com/mariozechner/pi-coding-agent) extension that gives pi its own persistent, file-based memory system — modeled on Claude Code's auto-memory behavior.
+A [pi](https://github.com/earendil-works/pi-coding-agent) extension that gives pi its own persistent, file-based memory system — modeled on Claude Code's auto-memory behavior.
 
 Companion to [pi-claude-memories](https://github.com/Acelogic/pi-claude-memories): that one reads Claude's memory files, this one lets pi write and maintain its own. The two are designed to coexist — different storage dirs, different command names, different status entries.
 
